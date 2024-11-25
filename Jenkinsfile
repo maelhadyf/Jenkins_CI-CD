@@ -1,17 +1,24 @@
 pipeline {
     agent any
     
+    tools {
+        nodejs 'nodejs-18'  // Must match the name you configured
+    }
+    
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-cred')
-        DOCKER_IMAGE = 'maelhadyf/nodejs-app'
+        DOCKER_HUB_USERNAME = 'maelhadyf'
+        DOCKER_CREDENTIALS = credentials('dockerhub-cred')
+        REPO_NAME = 'nodejs-app'
     }
     
     stages {
         stage('Checkout') {
             steps {
+                cleanWs()
+                checkout scm
                 script {
-                    // Get branch name
-                    env.BRANCH_NAME = env.BRANCH_NAME ?: 'main'
+                    def branchName = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main'
+                    env.BRANCH_NAME = branchName.replaceAll('origin/', '')
                     echo "Building branch: ${env.BRANCH_NAME}"
                 }
             }
@@ -19,6 +26,10 @@ pipeline {
         
         stage('Install Dependencies') {
             steps {
+                // Verify NodeJS installation
+                sh 'node --version'
+                sh 'npm --version'
+                // Install dependencies
                 sh 'npm install'
             }
         }
@@ -26,8 +37,13 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Build image with branch name as tag
-                    sh "docker build -t ${DOCKER_IMAGE}:${env.BRANCH_NAME} ."
+                    try {
+                        sh """
+                        docker build -t ${DOCKER_HUB_USERNAME}/${REPO_NAME}:${env.BRANCH_NAME} .
+                        """
+                    } catch (Exception e) {
+                        error "Failed to build Docker image: ${e.message}"
+                    }
                 }
             }
         }
@@ -35,8 +51,13 @@ pipeline {
         stage('Login to DockerHub') {
             steps {
                 script {
-                    // Login to DockerHub
-                    sh 'echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin'
+                    try {
+                        sh """
+                        echo ${DOCKER_CREDENTIALS_PSW} | docker login -u ${DOCKER_CREDENTIALS_USR} --password-stdin
+                        """
+                    } catch (Exception e) {
+                        error "Failed to login to Docker Hub: ${e.message}"
+                    }
                 }
             }
         }
@@ -44,8 +65,13 @@ pipeline {
         stage('Push to DockerHub') {
             steps {
                 script {
-                    // Push image with branch tag
-                    sh "docker push ${DOCKER_IMAGE}:${env.BRANCH_NAME}"
+                    try {
+                        sh """
+                        docker push ${DOCKER_HUB_USERNAME}/${REPO_NAME}:${env.BRANCH_NAME}
+                        """
+                    } catch (Exception e) {
+                        error "Failed to push image: ${e.message}"
+                    }
                 }
             }
         }
@@ -53,9 +79,13 @@ pipeline {
     
     post {
         always {
-            // Cleanup
-            sh 'docker logout'
-            cleanWs()
+            script {
+                sh 'docker logout'
+                sh """
+                docker rmi ${DOCKER_HUB_USERNAME}/${REPO_NAME}:${env.BRANCH_NAME} || true
+                """
+                cleanWs()
+            }
         }
         success {
             echo "Pipeline completed successfully!"
